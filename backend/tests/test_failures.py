@@ -85,7 +85,8 @@ def test_hindsight_down_degrades_gracefully(client, fake_hindsight, fake_groq):
     assert resp.status_code == 200
     body = resp.json()
     assert body["recall"]["status"] == "error"
-    assert "Historical memory was unavailable" in body["recall"]["message"]
+    assert "Hindsight memory is temporarily unavailable" in body["recall"]["message"]
+    assert "can still be analyzed without historical memory" in body["recall"]["message"]
     assert body["analysis"]["historical_matches"] == []  # nothing invented when memory failed
     assert "memory was unavailable" in fake_groq.of("analysis")[-1].user
 

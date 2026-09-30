@@ -1,4 +1,12 @@
-"""API contracts (request validation and typed responses)."""
+"""Domain model and API contracts of the incident-response agent.
+
+- IncidentInput: the current production incident being analyzed
+- ResolutionInput: an engineer-confirmed resolution (root cause, fix, outcome, failed approaches)
+- RecalledIncident / RecallResult: historical incident memory recalled from Hindsight (evidence)
+- IncidentAnalysis / HistoricalMatch: Groq's reasoning, including the incident comparison
+- AutoMemoryItem / KnowledgeCategory: durable knowledge automatically extracted for retention
+- PreferenceResult: long-term user preference memory, kept separate from incident knowledge
+"""
 
 from enum import StrEnum
 from typing import Literal
@@ -25,6 +33,10 @@ def _level(v: object, default: str = "Medium") -> str:
 
 
 class IncidentInput(BaseModel):
+    """The current production incident: what is failing, where, how badly, and what changed.
+    `additional_instructions` are the user's instructions for this analysis (they may also state
+    a lasting preference or a team rule, which the learning step decides)."""
+
     model_config = ConfigDict(str_strip_whitespace=True)
 
     title: str = Field(min_length=3, max_length=200)
@@ -38,6 +50,9 @@ class IncidentInput(BaseModel):
 
 
 class ResolutionInput(BaseModel):
+    """A confirmed resolution: the verified root cause, the fix applied, its outcome and the
+    approaches that failed. Retained in Hindsight as confirmed knowledge."""
+
     model_config = ConfigDict(str_strip_whitespace=True)
 
     root_cause: str = Field(min_length=3, max_length=2000)
@@ -57,7 +72,8 @@ class RecalledFact(BaseModel):
 
 
 class RecalledIncident(BaseModel):
-    """One previous incident recalled from Hindsight, with the facts Hindsight returned for it."""
+    """One historical incident recalled from Hindsight, with the facts Hindsight returned for it.
+    It is evidence for the analysis, not the answer."""
 
     incident_id: str | None = None
     title: str | None = None
@@ -72,8 +88,9 @@ class RecalledIncident(BaseModel):
     recent_changes: str | None = None
     resolved_at: str | None = None
     relevance_score: float | None = None
-    # True = a human confirmed this resolution. False = auto-extracted hypothesis from an analysis.
-    confirmed: bool = True
+    # True = an engineer confirmed this resolution. False = auto-extracted, unconfirmed hypothesis.
+    # Defaults to False so nothing is ever presented as confirmed without positive evidence.
+    confirmed: bool = False
     why_relevant: list[str] = Field(default_factory=list)
     facts: list[RecalledFact] = Field(default_factory=list)
 
@@ -101,6 +118,8 @@ class PossibleCause(BaseModel):
 
 
 class HistoricalMatch(BaseModel):
+    """Incident comparison: how a recalled historical incident relates to the current one."""
+
     incident: str
     similarities: list[str] = Field(default_factory=list)
     differences: list[str] = Field(default_factory=list)
@@ -125,8 +144,22 @@ class IncidentAnalysis(BaseModel):
 # ---------- learning ----------
 
 
+# Durable incident-response knowledge worth retaining (see app/agent/memory_extractor.py).
+KnowledgeCategory = Literal[
+    "root_cause",  # unconfirmed until an engineer confirms the resolution
+    "resolution",
+    "diagnostic_finding",
+    "incident_pattern",
+    "service_knowledge",
+    "configuration_lesson",
+    "team_instruction",  # only a standing rule the user explicitly wrote
+]
+
+
 class AutoMemoryItem(BaseModel):
-    category: str
+    """One durable knowledge item automatically extracted from an incident analysis."""
+
+    category: KnowledgeCategory
     content: str
 
 

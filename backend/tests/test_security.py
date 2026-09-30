@@ -8,6 +8,18 @@ import pytest
 from app.observability import SecretRedactingFilter
 from app.redaction import redact
 from tests.conftest import DEMO_1, DEMO_2, GROQ_KEY, HINDSIGHT_KEY, RESOLUTION_1, bank_of, register
+from tests.fake_secrets import (
+    FAKE_AWS_KEY,
+    FAKE_BASIC_AUTH,
+    FAKE_DB_PASSWORD,
+    FAKE_DB_URL,
+    FAKE_JWT,
+    FAKE_PASSWORD,
+    FAKE_PRIVATE_KEY,
+    FAKE_PRIVATE_KEY_BODY,
+    FAKE_PROVIDER_KEY,
+    FAKE_SK_KEY,
+)
 
 SECRETS = (GROQ_KEY, HINDSIGHT_KEY)
 
@@ -15,16 +27,16 @@ SECRETS = (GROQ_KEY, HINDSIGHT_KEY)
 @pytest.mark.parametrize(
     ("text", "leaked"),
     [
-        ("password=hunter2", "hunter2"),
+        (f"password={FAKE_PASSWORD}", FAKE_PASSWORD),
         ('{"api_key": "abc123secret"}', "abc123secret"),
-        ("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U", "dozjgNryP4J3"),
-        ("Authorization: Basic dXNlcjpwYXNzd29yZA==", "dXNlcjpwYXNzd29yZA"),
-        ("key gsk_abcdefghijklmnopqrstuvwxyz0123", "gsk_abcdefghijklmnop"),
-        ("aws AKIAABCDEFGHIJKLMNOP", "AKIAABCDEFGHIJKLMNOP"),
-        ("postgres://admin:s3cretpw@db.internal:5432/app", "s3cretpw"),
+        (f"Authorization: Bearer {FAKE_JWT}", FAKE_JWT.split(".")[2][:12]),
+        (f"Authorization: Basic {FAKE_BASIC_AUTH}", FAKE_BASIC_AUTH.rstrip("=")),
+        (f"key {FAKE_PROVIDER_KEY}", FAKE_PROVIDER_KEY[:20]),
+        (f"aws {FAKE_AWS_KEY}", FAKE_AWS_KEY),
+        (FAKE_DB_URL, FAKE_DB_PASSWORD),
         ("contact jane.doe@example.com", "jane.doe@example.com"),
         ("card 4111 1111 1111 1111", "4111 1111 1111 1111"),
-        ("-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----", "MIIEow"),
+        (FAKE_PRIVATE_KEY, FAKE_PRIVATE_KEY_BODY),
     ],
 )
 def test_redaction(text, leaked):
@@ -115,12 +127,12 @@ def test_sql_in_fields_is_stored_literally(client):
 def test_confirmed_resolution_memory_is_redacted(client, fake_hindsight):
     headers = register(client)
     bank = bank_of(client, headers)
-    leaky = {**DEMO_1, "error_logs": "auth failed password=hunter2 token: tok_live_abcdef123456 for ops@example.com"}
+    leaky = {**DEMO_1, "error_logs": f"auth failed password={FAKE_PASSWORD} token: tok_live_abcdef123456 for ops@example.com"}
     inc = client.post("/api/incidents/analyze", json=leaky, headers=headers).json()["incident_id"]
-    client.post(f"/api/incidents/{inc}/resolve", json={**RESOLUTION_1, "notes": "rotated api_key=sk-live-0123456789abcdefghij"}, headers=headers)
+    client.post(f"/api/incidents/{inc}/resolve", json={**RESOLUTION_1, "notes": f"rotated api_key={FAKE_SK_KEY}"}, headers=headers)
     doc = fake_hindsight.docs(bank)[inc]
     stored = doc.content + " ".join(doc.metadata.values())
-    for leaked in ("hunter2", "tok_live_abcdef123456", "ops@example.com", "sk-live-0123456789abcdefghij"):
+    for leaked in (FAKE_PASSWORD, "tok_live_abcdef123456", "ops@example.com", FAKE_SK_KEY):
         assert leaked not in stored
 
 
@@ -129,10 +141,10 @@ def test_auto_memory_is_redacted(client, fake_hindsight, fake_groq):
     bank = bank_of(client, headers)
     fake_groq.push("extraction", {
         "worth_remembering": True, "reason": "r", "likely_root_cause": "", "recommended_fix": "",
-        "memories": [{"category": "service_knowledge", "content": "payment-api connects with password=hunter2 to Redis"}],
+        "memories": [{"category": "service_knowledge", "content": f"payment-api connects with password={FAKE_PASSWORD} to Redis"}],
     })
     inc = client.post("/api/incidents/analyze", json=DEMO_1, headers=headers).json()["incident_id"]
-    assert "hunter2" not in fake_hindsight.docs(bank)[f"{inc}:analysis"].content
+    assert FAKE_PASSWORD not in fake_hindsight.docs(bank)[f"{inc}:analysis"].content
 
 
 def test_prompt_injection_cannot_break_out_of_the_data_section(client, fake_groq):

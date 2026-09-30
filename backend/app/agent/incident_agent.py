@@ -1,9 +1,15 @@
-"""The incident-response loop.
+"""The AI incident-response loop: RECALL -> REASON -> EXTRACT -> RETAIN.
 
-    RECALL  incident memories ‖ preference profile        (Hindsight, user's own bank, in parallel)
-    REASON  Groq analysis     ‖ preference learning        (in parallel: learning needs only the instruction)
-    -> response to the user
-    LEARN   memory extraction (Groq) -> RETAIN (Hindsight)  (background task, status persisted)
+    RECALL   historical incident memory ‖ user preference profile  (Hindsight, user's own bank, in parallel)
+    REASON   Groq analysis ‖ preference learning   (current incident + historical evidence + preferences)
+    -> incident analysis returned to the user
+    EXTRACT  automatic knowledge extraction (Groq, quality gate)   (background task, status persisted)
+    RETAIN   durable knowledge -> Hindsight as unconfirmed hypotheses; an engineer's resolution is
+             retained separately as confirmed knowledge (POST /api/incidents/{id}/resolve)
+
+Historical memory is evidence, not the answer: the prompt asks Groq to compare each recalled incident
+with the current one and to say whether a previous fix still applies. The agent only recommends
+diagnostic checks and fixes; it never executes anything against production.
 """
 
 import asyncio

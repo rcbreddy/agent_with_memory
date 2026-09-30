@@ -1,30 +1,32 @@
-"""Automatic memory extraction: after every analysis, decide what is worth remembering.
+"""Automatic knowledge extraction: after every analysis, decide what is worth remembering.
 
-Groq distills the incident + analysis into a few short, durable knowledge items. Only those
-items (never the raw incident text, logs or conversation) are retained in Hindsight.
+Groq distills the incident + analysis into a few short, durable knowledge items (root cause,
+resolution, diagnostic finding, incident pattern, service knowledge, configuration lesson, team
+instruction). Only those items, never the raw incident text, logs or conversation, are retained in
+Hindsight. Rules enforced by the quality gate in filter_items():
+
+- The incident is not resolved yet, so root causes and fixes are labelled as unconfirmed hypotheses.
+  Confirmed knowledge comes only from an engineer's resolution (retain_incident_resolution).
+- Temporary instructions ("be brief this time") never become durable memory; a team instruction is
+  kept only if the user explicitly wrote it.
+- Secrets and personal data are redacted; raw log lines are dropped.
+- Exact and near-duplicates of existing memory are skipped.
 """
 
 import logging
 import re
+from typing import get_args
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from app.config import get_settings
 from app.groq.client import GroqError, chat_json
 from app.redaction import redact
-from app.schemas import AutoMemoryItem, IncidentAnalysis, IncidentInput, RecallResult
+from app.schemas import AutoMemoryItem, IncidentAnalysis, IncidentInput, KnowledgeCategory, RecallResult
 
 log = logging.getLogger(__name__)
 
-CATEGORIES = {
-    "root_cause",
-    "resolution",
-    "diagnostic_finding",
-    "incident_pattern",
-    "service_knowledge",
-    "configuration_lesson",
-    "team_instruction",
-}
+CATEGORIES: frozenset[str] = frozenset(get_args(KnowledgeCategory))
 
 SYSTEM_PROMPT = """You curate the long-term memory of an SRE incident-response agent.
 Given one incident and its analysis, decide what is worth remembering for FUTURE incident investigations.

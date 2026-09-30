@@ -51,7 +51,7 @@ React (Vite, TS, Tailwind)  ──fetch──▶  FastAPI
 | L6 | MEDIUM | Latency | Concurrent cold-cache `ensure_bank` calls issue duplicate `acreate_bank` requests; login blocks on a Hindsight bank upsert. |
 | L7 | MEDIUM | Latency | Public `/api/health` makes a Hindsight network call on every hit (uncached). |
 | S5 | MEDIUM | Security | Upstream error bodies (Groq error text, Hindsight exception text) are forwarded to clients. LLM output (may contain incident content) is logged on validation failure. |
-| S6 | MEDIUM | Security | Insecure default `DEMO_PASSWORD=admin123`; CORS allows all methods/headers; production URLs hardcoded. |
+| S6 | MEDIUM | Security | Insecure hard-coded default demo password (now empty by default); CORS allows all methods/headers; production URLs hardcoded. |
 | S7 | MEDIUM | Security | Incident text is interpolated into prompts with no data/instruction boundary (prompt injection). Isolation limits blast radius to the attacker's own bank. |
 | S8 | MEDIUM | Security | Redaction misses quoted JSON secrets (`"api_key": "…"`), `Authorization: Basic …`. |
 | Q1 | MEDIUM | Code quality | `preferences.py` imports private `_describe`/`_get_client`; auth routes mix HTTP, hashing, session and migration logic; untyped `dict` responses (`/me`, list, health); status fields are free-form `str`. |
@@ -108,3 +108,22 @@ D1, A1.
 6. **L5/L6/L7/O1** Prompt/recall budgets; ensure-bank de-duplication; cached health; stage timings + token usage.
 7. **Q1/Q2** Split auth service from routes; typed responses; consistent retry policy.
 8. **A1/D1/F1/F2** Accessibility fixes, README rewrite, `.env.example`, dev API base fix.
+
+## Follow-up: secret-hygiene re-audit (after commit `5fdde35`)
+
+An external evaluator reported *"raw database connection string with credentials"*.
+
+* **Source:** `backend/tests/test_security.py` (redaction test table) contained a literal
+  PostgreSQL URL with an inline username and password. It was a fake test value, never a real credential, but it
+  is indistinguishable from one to a secret scanner. Other test fixtures held similar fake API-key, JWT and
+  private-key-block literals. The application itself uses SQLite through `DATABASE_PATH` (a file path, no
+  credentials) and has no connection string anywhere.
+* **Fix:** fake values moved to `backend/tests/fake_secrets.py`, assembled at runtime so no credential-shaped
+  literal is stored in the repository. `backend/tests/test_repository_hygiene.py` scans every git-tracked file
+  for credential patterns and sensitive files (`.env`, `*.db`, private keys, `.ollama/`) and checks that
+  `.env.example` holds placeholders only. `.gitignore` also ignores private-key files.
+* **Git history:** the fake connection string remains in earlier commits; it is not a credential, so no
+  rotation is needed for it. `backend/incidents.db` (S1) is still in the history of commit `61a2992`.
+  Its plaintext session tokens were invalidated by the hashed-session migration, but the file also holds
+  PBKDF2 password hashes and incident content: see README → *Security* for the recommended history purge
+  and password resets.

@@ -85,6 +85,29 @@ function PromptViewer({ incidentId }: { incidentId: string }) {
   )
 }
 
+const REASONING_FLOW = ['Current incident', 'Historical evidence', 'Similarities', 'Differences', 'Reasoning', 'Recommended checks', 'Recommended solution', 'Confidence']
+
+function ReasoningFlow() {
+  return (
+    <ol aria-label="How this analysis was reasoned" className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-300">
+      {REASONING_FLOW.map((step, i) => (
+        <li key={step} className="flex items-center gap-1.5">
+          <span className="rounded bg-slate-800 px-2 py-0.5">{step}</span>
+          {i < REASONING_FLOW.length - 1 && <span aria-hidden="true" className="text-slate-500">→</span>}
+        </li>
+      ))}
+    </ol>
+  )
+}
+
+function evidenceSummary(recall: AnalyzeResponse['recall']): string {
+  if (recall.status === 'error') return 'Hindsight memory was unavailable, so this incident was analyzed without historical memory.'
+  if (recall.status === 'empty' || recall.memories.length === 0) return 'No relevant historical incidents were found, so no historical evidence was used.'
+  const n = recall.memories.length
+  const confirmed = recall.memories.filter((m) => m.confirmed).length
+  return `${n} historical incident${n === 1 ? '' : 's'} from Hindsight were given to Groq as evidence (${confirmed} confirmed resolution${confirmed === 1 ? '' : 's'}, ${n - confirmed} unconfirmed hypothes${n - confirmed === 1 ? 'is' : 'es'}).`
+}
+
 export default function AnalysisPanel({ result }: { result: AnalyzeResponse }) {
   const a = result.analysis
   return (
@@ -99,30 +122,22 @@ export default function AnalysisPanel({ result }: { result: AnalyzeResponse }) {
       }
     >
       <div className="space-y-6">
+        <ReasoningFlow />
+
         <div>
-          <SectionHeading>Summary</SectionHeading>
+          <SectionHeading>Current incident</SectionHeading>
           <p className="text-sm leading-relaxed text-slate-100">{a.summary}</p>
         </div>
 
         <div>
-          <SectionHeading>Possible causes</SectionHeading>
-          <ul className="space-y-2">
-            {a.possible_causes.map((c, i) => (
-              <li key={i} className="rounded-md border border-slate-800 bg-slate-950/50 p-3">
-                <div className="flex items-start justify-between gap-2">
-                  <span className="text-sm font-medium text-white">{c.cause}</span>
-                  <Badge tone={likelihoodTone(c.likelihood)}>{c.likelihood} likelihood</Badge>
-                </div>
-                {c.evidence && <p className="mt-1 text-xs text-slate-300">{c.evidence}</p>}
-              </li>
-            ))}
-          </ul>
+          <SectionHeading>Historical evidence</SectionHeading>
+          <p className="text-sm text-slate-200">{evidenceSummary(result.recall)}</p>
         </div>
 
         <div>
-          <SectionHeading>Compared with past incidents</SectionHeading>
+          <SectionHeading>Similarities and differences with historical incidents</SectionHeading>
           {a.historical_matches.length === 0 ? (
-            <p className="text-sm text-slate-400">No historical incidents were used for this analysis.</p>
+            <p className="text-sm text-slate-400">No historical incidents were compared for this analysis.</p>
           ) : (
             <ul className="space-y-3">
               {a.historical_matches.map((m, i) => (
@@ -148,6 +163,21 @@ export default function AnalysisPanel({ result }: { result: AnalyzeResponse }) {
         </div>
 
         <div>
+          <SectionHeading>Reasoning — possible causes</SectionHeading>
+          <ul className="space-y-2">
+            {a.possible_causes.map((c, i) => (
+              <li key={i} className="rounded-md border border-slate-800 bg-slate-950/50 p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <span className="text-sm font-medium text-white">{c.cause}</span>
+                  <Badge tone={likelihoodTone(c.likelihood)}>{c.likelihood} likelihood</Badge>
+                </div>
+                {c.evidence && <p className="mt-1 text-xs text-slate-300">{c.evidence}</p>}
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div>
           <SectionHeading>Recommended checks</SectionHeading>
           <ol className="list-inside list-decimal space-y-1 text-sm text-slate-100">
             {a.recommended_checks.map((c, i) => <li key={i}>{c}</li>)}
@@ -157,6 +187,7 @@ export default function AnalysisPanel({ result }: { result: AnalyzeResponse }) {
         <div>
           <SectionHeading>Recommended solution</SectionHeading>
           <p className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm leading-relaxed text-emerald-50">{a.recommended_solution}</p>
+          <p className="mt-1 text-xs text-slate-400">The agent recommends actions; it never runs commands against production.</p>
         </div>
 
         <div>

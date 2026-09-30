@@ -1,8 +1,12 @@
-"""Hindsight memory layer (official `hindsight-client` SDK, Hindsight Cloud).
+"""Hindsight: the persistent agent memory for incident response (official `hindsight-client` SDK).
 
-- recall_incident_memory(): RECALL knowledge relevant to a new incident from the user's own bank
-- retain_incident_resolution(): RETAIN a human-confirmed resolution (trusted knowledge)
-- retain_incident_knowledge(): RETAIN auto-extracted analysis knowledge (unconfirmed hypotheses)
+Each user has a private memory bank. Historical incident memory held here is *evidence* for the
+reasoning step, never the answer itself.
+
+- recall_incident_memory(): semantic RECALL of historical incidents relevant to a new production
+  incident, ranked by service, relevance and trust (confirmed resolution > unconfirmed hypothesis)
+- retain_incident_resolution(): RETAIN an engineer-confirmed resolution (confirmed knowledge)
+- retain_incident_knowledge(): RETAIN automatically extracted analysis knowledge (unconfirmed hypotheses)
 """
 
 import asyncio
@@ -34,6 +38,9 @@ INCIDENT_TAG = "kind:incident-resolution"
 # Metadata "memory_source" values. Memories without it predate auto-memory and came from resolutions.
 SOURCE_AUTO = "auto-analysis"
 SOURCE_RESOLUTION = "confirmed-resolution"
+# Auto-extracted knowledge is retained as document "<incident id>:analysis", separate from the
+# confirmed resolution document "<incident id>".
+ANALYSIS_DOCUMENT_SUFFIX = ":analysis"
 # Ranking bonus for human-confirmed knowledge over auto-extracted hypotheses.
 CONFIRMED_TRUST_BONUS = 0.2
 HEALTH_CACHE_SECONDS = 30.0
@@ -241,6 +248,18 @@ def _incident_from_metadata(doc: str, meta: dict[str, Any], confirmed: bool) -> 
     )
 
 
+def is_confirmed_resolution(meta: dict[str, Any], document_id: str | None) -> bool:
+    """Only an engineer-confirmed resolution counts as confirmed knowledge.
+
+    Auto-extracted analysis knowledge is an unconfirmed hypothesis. It is recognised by its
+    `memory_source` metadata or, if metadata is missing, by its `<incident id>:analysis` document id,
+    so a hypothesis can never be shown as a confirmed resolution. Memories that predate
+    `memory_source` came only from resolutions."""
+    if meta.get("memory_source") == SOURCE_AUTO:
+        return False
+    return not (document_id or "").endswith(ANALYSIS_DOCUMENT_SUFFIX)
+
+
 def group_recall_results(results: list[Any]) -> tuple[list[RecalledIncident], list[RecalledFact]]:
     """Group recalled facts by source incident. An incident can have an auto-extracted analysis memory
     and a confirmed resolution memory; the confirmed details take precedence."""
@@ -254,7 +273,7 @@ def group_recall_results(results: list[Any]) -> tuple[list[RecalledIncident], li
         if not doc:
             loose.append(fact)
             continue
-        confirmed = meta.get("memory_source", SOURCE_RESOLUTION) != SOURCE_AUTO
+        confirmed = is_confirmed_resolution(meta, r.document_id)
         item = grouped.get(doc)
         if item is None or (confirmed and not item.confirmed):
             details = _incident_from_metadata(doc, meta, confirmed)
@@ -314,8 +333,8 @@ async def recall_incident_memory(incident: IncidentInput, bank_id: str) -> Recal
         log.warning("Hindsight recall failed: %s", describe_error(exc))
         return RecallResult(
             status="error",
-            message=f"Historical memory was unavailable: Hindsight recall failed ({describe_error(exc)}). "
-            "This analysis uses the current incident only.",
+            message=f"Hindsight memory is temporarily unavailable (recall failed: {describe_error(exc)}). "
+            "The incident can still be analyzed without historical memory: this analysis uses the current incident only.",
             query=query,
         )
 
@@ -459,7 +478,7 @@ async def retain_incident_knowledge(
         context="incident-response knowledge extracted automatically after an incident analysis",
         # Separate document from a later confirmed resolution (document_id=incident_id),
         # so neither replaces the other.
-        document_id=f"{incident_id}:analysis",
+        document_id=f"{incident_id}{ANALYSIS_DOCUMENT_SUFFIX}",
         timestamp=now,
         metadata=metadata,
         tags=[INCIDENT_TAG, f"service:{incident.service}", f"env:{incident.environment}", f"source:{SOURCE_AUTO}"],

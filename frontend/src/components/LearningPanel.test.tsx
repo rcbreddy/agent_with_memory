@@ -21,7 +21,7 @@ describe('LearningPanel', () => {
     const learning = vi.spyOn(api, 'learning').mockResolvedValueOnce(pending).mockResolvedValueOnce(stored)
     const onSettled = vi.fn()
     render(<LearningPanel incidentId="INC-BBBB0002" memory={pending} preferences={prefs} onSettled={onSettled} />)
-    expect(screen.getByText('Learning…')).toBeTruthy()
+    expect(screen.getByText('Learning from this incident…')).toBeTruthy()
 
     await act(() => vi.advanceTimersByTimeAsync(POLL_DELAYS_MS[0]))
     await act(() => vi.advanceTimersByTimeAsync(POLL_DELAYS_MS[1]))

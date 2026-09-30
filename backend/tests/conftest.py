@@ -15,10 +15,12 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
 
+from tests.fake_secrets import FAKE_GROQ_KEY, FAKE_HINDSIGHT_KEY
+
 # Never read the developer's real backend/.env in tests.
 os.environ["APP_ENV_FILE"] = ""
-GROQ_KEY = "gsk_TESTSECRETgroqkey0123456789abcdef"
-HINDSIGHT_KEY = "hs_TESTSECREThindsightkey0123456789"
+GROQ_KEY = FAKE_GROQ_KEY
+HINDSIGHT_KEY = FAKE_HINDSIGHT_KEY
 os.environ.update(
     GROQ_API_KEY=GROQ_KEY,
     HINDSIGHT_API_KEY=HINDSIGHT_KEY,

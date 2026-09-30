@@ -91,7 +91,7 @@ export default function Dashboard({ user, onLogout }: { user: string; onLogout: 
   const done = !result ? 0 : retained ? LOOP.length : 3
   const active = loading ? 0 : result && !retained ? 3 : -1
   const status = loading
-    ? 'Recalling similar incidents from Hindsight and analyzing with Groq…'
+    ? 'Recalling relevant incidents from Hindsight, then analyzing the current incident with Groq…'
     : error
       ? ''
       : result
@@ -127,7 +127,9 @@ export default function Dashboard({ user, onLogout }: { user: string; onLogout: 
 
       {health && !health.hindsight.ok && (
         <div className="mx-auto max-w-7xl px-6 pt-4">
-          <ErrorBox>Hindsight is not reachable ({health.hindsight.detail}). Analyses will run without historical memory.</ErrorBox>
+          <ErrorBox>
+            Hindsight memory is temporarily unavailable ({health.hindsight.detail}). The incident can still be analyzed without historical memory.
+          </ErrorBox>
         </div>
       )}
 
@@ -140,7 +142,7 @@ export default function Dashboard({ user, onLogout }: { user: string; onLogout: 
           {!result && !error && (
             <div className="flex h-full min-h-64 items-center justify-center rounded-xl border border-dashed border-slate-700 p-10 text-center text-sm text-slate-300">
               {loading
-                ? 'Recalling similar incidents from Hindsight, then asking Groq to analyze…'
+                ? 'Recalling relevant incidents from Hindsight… then analyzing the current incident with Groq…'
                 : 'Describe an incident and choose “Analyze Incident”. The agent first recalls relevant past incidents from your Hindsight memory.'}
             </div>
           )}

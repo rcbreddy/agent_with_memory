@@ -4,7 +4,7 @@ import type { Tone } from './styles'
 import { Badge, Card, SectionHeading, Spinner } from './ui'
 
 const STATUS: Record<AutoMemoryResult['status'], { tone: Tone; label: string }> = {
-  pending: { tone: 'sky', label: 'Learning…' },
+  pending: { tone: 'sky', label: 'Learning from this incident…' },
   stored: { tone: 'violet', label: 'Retained as hypothesis' },
   skipped: { tone: 'slate', label: 'Nothing new to retain' },
   error: { tone: 'red', label: '⚠ Not retained' },
@@ -25,7 +25,7 @@ export default function LearningPanel({ incidentId, memory, preferences, onSettl
     <Card title="3 · Learn — what the agent remembers" icon={<span className="text-violet-400">✦</span>} right={<Badge tone={status.tone}>{status.label}</Badge>}>
       <div className="space-y-5">
         <div aria-live="polite" aria-busy={learning.status === 'pending'}>
-          <SectionHeading>Incident knowledge (Hindsight retain)</SectionHeading>
+          <SectionHeading>Incident memory — automatically extracted knowledge (Hindsight retain)</SectionHeading>
           <p className="flex items-center gap-2 text-sm text-slate-200">
             {learning.status === 'pending' && <Spinner />}
             {learning.message}
@@ -47,7 +47,7 @@ export default function LearningPanel({ incidentId, memory, preferences, onSettl
         </div>
 
         <div>
-          <SectionHeading>Your long-term preferences</SectionHeading>
+          <SectionHeading>User preference memory — kept separate from incident knowledge</SectionHeading>
           <p className={`text-sm ${preferences.status === 'error' ? 'text-rose-200' : 'text-slate-200'}`}>{preferences.message}</p>
           {preferences.applied.length > 0 && (
             <ul className="mt-2 list-inside list-disc text-sm text-slate-300">

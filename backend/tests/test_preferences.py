@@ -4,6 +4,7 @@ and one-off instructions do not become permanent until repeated."""
 from app.agent.preference_learner import _Decision, _Item, apply_decision
 from app.hindsight.preferences import PREFERENCE_TAG, PROFILE_DOCUMENT_ID, PROMOTE_AFTER, PreferenceProfile
 from tests.conftest import DEMO_1, bank_of, register
+from tests.fake_secrets import FAKE_PASSWORD
 
 
 def _analyze(client, headers, instructions=""):
@@ -85,8 +86,8 @@ def test_apply_decision_ignores_unknown_actions_and_redacts():
     profile = PreferenceProfile()
     decision = _Decision(changes=[
         _Item(action="explode", key="x", preference="nope"),
-        _Item(action="add", key="Language Choice!", preference="Respond in Spanish. password=hunter2"),
+        _Item(action="add", key="Language Choice!", preference=f"Respond in Spanish. password={FAKE_PASSWORD}"),
     ])
     changes = apply_decision(profile, decision)
     assert [c.key for c in changes] == ["language-choice"]
-    assert "hunter2" not in profile.preferences[0].preference
+    assert FAKE_PASSWORD not in profile.preferences[0].preference

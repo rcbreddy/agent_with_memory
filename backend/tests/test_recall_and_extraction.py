@@ -10,6 +10,7 @@ from app.hindsight.client import (
     SOURCE_AUTO,
     SOURCE_RESOLUTION,
     group_recall_results,
+    is_confirmed_resolution,
     select_relevant,
     why_relevant,
 )
@@ -47,6 +48,28 @@ def test_grouping_prefers_confirmed_details_and_dedupes_facts():
     assert only.confirmed is True and only.root_cause == "Redis pool exhaustion"
     assert [f.text for f in only.facts] == ["Redis pool exhausted", "Pool raised to 150"]
     assert only.relevance_score == 0.7
+
+
+@pytest.mark.parametrize(
+    ("metadata", "document_id", "confirmed"),
+    [
+        ({"memory_source": SOURCE_RESOLUTION}, "INC-1", True),
+        ({"memory_source": SOURCE_AUTO}, "INC-1:analysis", False),
+        ({"memory_source": SOURCE_AUTO}, "INC-1", False),  # source wins even with a resolution-style id
+        ({}, "INC-1:analysis", False),  # metadata lost: the analysis document is still a hypothesis
+        ({}, "INC-1", True),  # memories that predate memory_source came only from resolutions
+    ],
+)
+def test_unconfirmed_hypothesis_is_never_classified_as_confirmed(metadata, document_id, confirmed):
+    assert is_confirmed_resolution(metadata, document_id) is confirmed
+    result = SimpleNamespace(text="Redis pool exhausted", type="world", metadata=metadata,
+                             document_id=document_id, scores=None)
+    [grouped], _ = group_recall_results([result])
+    assert grouped.confirmed is confirmed
+
+
+def test_recalled_incident_is_unconfirmed_unless_stated():
+    assert RecalledIncident().confirmed is False
 
 
 def test_low_relevance_other_service_is_dropped(incident):
