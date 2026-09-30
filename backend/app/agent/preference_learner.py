@@ -9,11 +9,11 @@
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
-from app.agent.memory_extractor import redact
+from app.config import get_settings
 from app.groq.client import GroqError, chat_json
 from app.hindsight.client import HindsightError
 from app.hindsight.preferences import (
@@ -26,6 +26,7 @@ from app.hindsight.preferences import (
     profile_lock,
     save_profile,
 )
+from app.redaction import redact
 from app.schemas import PreferenceChange
 
 log = logging.getLogger(__name__)
@@ -91,7 +92,7 @@ class _Decision(BaseModel):
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def apply_decision(profile: PreferenceProfile, decision: _Decision) -> list[PreferenceChange]:
@@ -109,7 +110,7 @@ def apply_decision(profile: PreferenceProfile, decision: _Decision) -> list[Pref
             continue
         text = redact(item.preference)[:300]
         if item.action not in {"add", "update"} or not text:
-            continue
+            continue  # unknown action from the model: ignore rather than guess
         old = prefs.get(item.key)
         if old and old.preference == text:
             continue
@@ -143,14 +144,16 @@ async def learn_preferences(bank_id: str, instruction: str) -> tuple[list[Prefer
     async with profile_lock(bank_id):
         try:
             profile = await load_profile(bank_id)
-            data = await chat_json(
+            result = await chat_json(
                 SYSTEM_PROMPT,
-                f"CURRENT PROFILE:\n{profile_as_json(profile)}\n\nUSER INSTRUCTION WITH THIS REPORT:\n{instruction}\n\nReturn only the JSON object.",
+                f"CURRENT PROFILE:\n{profile_as_json(profile)}\n\n"
+                f"USER INSTRUCTION WITH THIS REPORT:\n{instruction}\n\nReturn only the JSON object.",
+                reasoning_effort=get_settings().groq_aux_reasoning_effort,
             )
-            decision = _Decision.model_validate(data)
+            decision = _Decision.model_validate(result.data)
         except (GroqError, HindsightError, ValidationError) as exc:
-            log.warning("Preference learning failed: %s", exc)
-            return [], f"preference learning failed ({exc})"
+            log.warning("Preference learning failed: %s", type(exc).__name__)
+            return [], "preference learning failed; stored preferences are unchanged"
 
         before = profile.model_dump(exclude={"updated_at"})
         changes = apply_decision(profile, decision)
@@ -160,5 +163,5 @@ async def learn_preferences(bank_id: str, instruction: str) -> tuple[list[Prefer
             await save_profile(bank_id, profile)
         except HindsightError as exc:
             return [], str(exc)
-        log.info("Preference profile updated for %s: %s", bank_id, [c.model_dump() for c in changes])
+        log.info("Preference profile updated: %s", [f"{c.action}:{c.key}" for c in changes])
         return changes, None

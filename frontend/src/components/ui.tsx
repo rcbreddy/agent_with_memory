@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react'
+import { useId, type ReactNode } from 'react'
+import { tones, type Tone } from './styles'
 
 export function Card({ title, icon, right, children, className = '' }: {
   title: string
@@ -7,11 +8,12 @@ export function Card({ title, icon, right, children, className = '' }: {
   children: ReactNode
   className?: string
 }) {
+  const headingId = useId()
   return (
-    <section className={`rounded-xl border border-slate-800 bg-slate-900/70 ${className}`}>
-      <header className="flex items-center justify-between gap-3 border-b border-slate-800 px-5 py-3">
-        <h2 className="flex items-center gap-2 text-sm font-semibold tracking-wide text-white">
-          {icon}
+    <section aria-labelledby={headingId} className={`rounded-xl border border-slate-800 bg-slate-900/70 ${className}`}>
+      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-5 py-3">
+        <h2 id={headingId} className="flex items-center gap-2 text-sm font-semibold tracking-wide text-white">
+          {icon && <span aria-hidden="true">{icon}</span>}
           {title}
         </h2>
         {right}
@@ -21,43 +23,38 @@ export function Card({ title, icon, right, children, className = '' }: {
   )
 }
 
-const tones = {
-  slate: 'bg-slate-700/40 text-slate-300 ring-slate-600/40',
-  green: 'bg-emerald-500/10 text-emerald-300 ring-emerald-500/30',
-  amber: 'bg-amber-500/10 text-amber-300 ring-amber-500/30',
-  red: 'bg-rose-500/10 text-rose-300 ring-rose-500/30',
-  sky: 'bg-sky-500/10 text-sky-300 ring-sky-500/30',
-  violet: 'bg-violet-500/10 text-violet-300 ring-violet-500/30',
-}
-export type Tone = keyof typeof tones
-
-export function Badge({ tone = 'slate', children }: { tone?: Tone; children: ReactNode }) {
+/** Status is always spelled out in text; colour is only a secondary cue. */
+export function Badge({ tone = 'slate', children, title }: { tone?: Tone; children: ReactNode; title?: string }) {
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${tones[tone]}`}>
+    <span title={title} className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ${tones[tone]}`}>
       {children}
     </span>
   )
 }
 
-export const severityTone = (s: string | null | undefined): Tone =>
-  s === 'Critical' ? 'red' : s === 'High' ? 'amber' : s === 'Medium' ? 'sky' : 'slate'
-
-export function Field({ label, children }: { label: string; children: ReactNode }) {
+export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-xs font-medium text-slate-400">{label}</span>
+      <span className="mb-1 block text-xs font-medium text-slate-300">{label}</span>
       {children}
+      {hint && <span className="mt-1 block text-xs text-slate-400">{hint}</span>}
     </label>
   )
 }
 
-export const inputCls =
-  'w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 outline-none placeholder:text-slate-600 focus:border-sky-500'
-
 export function Spinner() {
-  return <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+  return <span aria-hidden="true" className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
 }
 
 export function ErrorBox({ children }: { children: ReactNode }) {
-  return <div className="rounded-md border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">{children}</div>
+  return (
+    <div role="alert" className="rounded-md border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+      <span className="font-semibold">Error: </span>
+      {children}
+    </div>
+  )
+}
+
+export function SectionHeading({ children }: { children: ReactNode }) {
+  return <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">{children}</h3>
 }

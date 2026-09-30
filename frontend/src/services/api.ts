@@ -1,6 +1,8 @@
-// Thin client for the FastAPI backend. Only a session token is stored in the browser.
+// Thin, typed client for the FastAPI backend. The browser only ever talks to FastAPI:
+// Groq and Hindsight keys never reach the frontend. Only a session token is stored here.
 
 export type Severity = 'Low' | 'Medium' | 'High' | 'Critical'
+export type Level = 'Low' | 'Medium' | 'High'
 
 export interface IncidentInput {
   title: string
@@ -29,8 +31,12 @@ export interface RecalledIncident {
   solution: string | null
   outcome: string | null
   failed_approaches: string | null
+  error_signature: string | null
+  recent_changes: string | null
   resolved_at: string | null
   relevance_score: number | null
+  /** true = confirmed by an engineer; false = auto-extracted, unconfirmed hypothesis */
+  confirmed: boolean
   why_relevant: string[]
   facts: RecalledFact[]
 }
@@ -45,12 +51,36 @@ export interface RecallResult {
 
 export interface IncidentAnalysis {
   summary: string
-  possible_causes: { cause: string; likelihood: string; evidence: string }[]
+  possible_causes: { cause: string; likelihood: Level; evidence: string }[]
   historical_matches: { incident: string; similarities: string[]; differences: string[]; how_it_applies: string }[]
   recommended_checks: string[]
   recommended_solution: string
-  confidence: 'Low' | 'Medium' | 'High'
+  confidence: Level
   confidence_reason: string
+}
+
+export interface AutoMemoryResult {
+  status: 'pending' | 'stored' | 'skipped' | 'error'
+  message: string
+  items: { category: string; content: string }[]
+  timings_ms: Record<string, number>
+}
+
+export interface PreferenceResult {
+  status: 'ok' | 'error'
+  message: string
+  applied: string[]
+  changes: { action: 'added' | 'updated' | 'removed' | 'learned'; key: string; preference: string }[]
+}
+
+export interface AnalysisMetrics {
+  total_ms: number
+  stages_ms: Record<string, number>
+  memories_recalled: number
+  facts_in_prompt: number
+  prompt_chars: number
+  prompt_tokens: number | null
+  completion_tokens: number | null
 }
 
 export interface AnalyzeResponse {
@@ -58,6 +88,9 @@ export interface AnalyzeResponse {
   analysis: IncidentAnalysis
   recall: RecallResult
   model: string
+  memory: AutoMemoryResult
+  preferences: PreferenceResult
+  metrics: AnalysisMetrics | null
 }
 
 export interface ResolutionInput {
@@ -72,8 +105,8 @@ export interface ResolveResponse {
   incident_id: string
   retained: boolean
   message: string
-  bank_id: string
   memory_document: string
+  retain_ms: number | null
 }
 
 export interface IncidentSummary {
@@ -90,9 +123,16 @@ export interface IncidentSummary {
   retained_in_hindsight: boolean
 }
 
+export interface HindsightStatus {
+  ok: boolean
+  detail: string
+  memory_units?: number | null
+}
+
 export interface Health {
   groq: { configured: boolean; model: string }
-  hindsight: { configured: boolean; ok: boolean; detail: string }
+  hindsight: HindsightStatus
+  hindsight_configured: boolean
 }
 
 export interface AuthResponse {
@@ -104,11 +144,18 @@ export interface AuthResponse {
 export interface Me {
   user_id: string
   username: string
-  hindsight: { ok: boolean; detail: string; memory_units?: number }
+  hindsight: HindsightStatus
+  preferences: string[] | null
 }
 
-// Only the session identity is kept in the browser. Incident data is never cached here;
-// it is always fetched from the server for the authenticated user.
+export interface IncidentMemories {
+  incident_id: string
+  recall: RecallResult | null
+  groq_prompt: string | null
+}
+
+// ---------------------------------------------------------------- session
+
 const SESSION_KEY = 'ira_session'
 const LEGACY_KEYS = ['ira_token', 'ira_user']
 
@@ -140,6 +187,8 @@ export const session = {
   },
 }
 
+// ---------------------------------------------------------------- transport
+
 export class ApiError extends Error {
   status: number
   constructor(status: number, message: string) {
@@ -148,62 +197,63 @@ export class ApiError extends Error {
   }
 }
 
-// Backend location. Override with VITE_API_URL (e.g. http://127.0.0.1:8000 for local FastAPI).
-const API_BASE = (import.meta.env.VITE_API_URL ?? 'https://agent-with-memory-1.onrender.com').replace(/\/+$/, '')
+// In development the Vite proxy forwards /api to the local FastAPI (same origin).
+// Production builds use VITE_API_URL, falling back to the deployed backend.
+const DEFAULT_PROD_API = 'https://agent-with-memory-1.onrender.com'
+export const API_BASE = (import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? '' : DEFAULT_PROD_API)).replace(/\/+$/, '')
 
 let onUnauthorized: () => void = () => {}
 export const setUnauthorizedHandler = (fn: () => void) => {
   onUnauthorized = fn
 }
 
+const AUTH_PATHS = ['/api/auth/login', '/api/auth/register']
+
+async function errorMessage(res: Response): Promise<string> {
+  try {
+    const body = await res.json()
+    if (typeof body.detail === 'string') return body.detail
+    if (Array.isArray(body.detail))
+      return body.detail.map((d: { loc: string[]; msg: string }) => `${d.loc.at(-1)}: ${d.msg}`).join('; ')
+  } catch {
+    /* non-JSON error body */
+  }
+  return `Request failed (${res.status})`
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
-  headers.set('Content-Type', 'application/json')
-  if (session.token) headers.set('Authorization', `Bearer ${session.token}`)
+  if (init.body) headers.set('Content-Type', 'application/json')
+  const token = session.token
+  if (token) headers.set('Authorization', `Bearer ${token}`)
 
   let res: Response
   try {
     res = await fetch(`${API_BASE}${path}`, { ...init, headers })
   } catch {
-    throw new ApiError(0, `Cannot reach the backend at ${API_BASE}.`)
+    throw new ApiError(0, 'Cannot reach the backend. Check your connection and try again.')
   }
-  if (res.status === 401 && !path.startsWith('/api/auth/login') && !path.startsWith('/api/auth/register')) {
+  if (res.status === 401 && !AUTH_PATHS.includes(path)) {
     session.clear()
     onUnauthorized()
   }
-  if (!res.ok) {
-    let message = `Request failed (${res.status})`
-    try {
-      const body = await res.json()
-      if (typeof body.detail === 'string') message = body.detail
-      else if (Array.isArray(body.detail))
-        message = body.detail.map((d: { loc: string[]; msg: string }) => `${d.loc.at(-1)}: ${d.msg}`).join('; ')
-    } catch {
-      /* non-JSON error body */
-    }
-    throw new ApiError(res.status, message)
-  }
-  return res.status === 204 ? (undefined as T) : res.json()
+  if (!res.ok) throw new ApiError(res.status, await errorMessage(res))
+  return res.status === 204 ? (undefined as T) : ((await res.json()) as T)
 }
 
+const post = <T>(path: string, body?: unknown) =>
+  request<T>(path, { method: 'POST', body: body === undefined ? undefined : JSON.stringify(body) })
+const incidentPath = (id: string, suffix = '') => `/api/incidents/${encodeURIComponent(id)}${suffix}`
+
 export const api = {
-  login: (username: string, password: string) =>
-    request<AuthResponse>('/api/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
-  register: (username: string, password: string) =>
-    request<AuthResponse>('/api/auth/register', { method: 'POST', body: JSON.stringify({ username, password }) }),
+  login: (username: string, password: string) => post<AuthResponse>('/api/auth/login', { username, password }),
+  register: (username: string, password: string) => post<AuthResponse>('/api/auth/register', { username, password }),
   me: () => request<Me>('/api/auth/me'),
-  logout: () => request<void>('/api/auth/logout', { method: 'POST' }),
+  logout: () => post<void>('/api/auth/logout'),
   health: () => request<Health>('/api/health'),
-  analyze: (incident: IncidentInput) =>
-    request<AnalyzeResponse>('/api/incidents/analyze', { method: 'POST', body: JSON.stringify(incident) }),
-  resolve: (id: string, resolution: ResolutionInput) =>
-    request<ResolveResponse>(`/api/incidents/${encodeURIComponent(id)}/resolve`, {
-      method: 'POST',
-      body: JSON.stringify(resolution),
-    }),
+  analyze: (incident: IncidentInput) => post<AnalyzeResponse>('/api/incidents/analyze', incident),
+  resolve: (id: string, resolution: ResolutionInput) => post<ResolveResponse>(incidentPath(id, '/resolve'), resolution),
   list: () => request<IncidentSummary[]>('/api/incidents'),
-  memories: (id: string) =>
-    request<{ incident_id: string; recall: RecallResult; groq_prompt: string }>(
-      `/api/incidents/${encodeURIComponent(id)}/memories`,
-    ),
+  learning: (id: string) => request<AutoMemoryResult>(incidentPath(id, '/learning')),
+  memories: (id: string) => request<IncidentMemories>(incidentPath(id, '/memories')),
 }

@@ -1,0 +1,39 @@
+[project]
+name = "incident-response-agent"
+version = "1.1.0"
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+markers = ["live: calls the real Groq and Hindsight APIs (opt-in: RUN_LIVE_TESTS=1)"]
+filterwarnings = ["ignore::DeprecationWarning:hindsight_client_api.*"]
+
+[tool.ruff]
+line-length = 130
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "ASYNC", "S", "BLE", "RUF"]
+ignore = [
+    "S101",    # assert is fine in tests
+    "RUF001",  # typographic characters in UI strings are intentional
+    "E501",    # long SQL/log lines are kept readable
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S107", "S108", "BLE001"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Path"]
+
+[tool.ruff.lint.isort]
+case-sensitive = true
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true
+packages = ["app"]

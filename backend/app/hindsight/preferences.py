@@ -11,12 +11,12 @@ So a cancelled preference is removed from memory instead of lingering next to it
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from hindsight_client_api.exceptions import NotFoundException
 from pydantic import BaseModel, Field, ValidationError
 
-from app.hindsight.client import HindsightError, _describe, _get_client, ensure_bank
+from app.hindsight.client import HindsightError, describe_error, ensure_bank, get_client
 
 log = logging.getLogger(__name__)
 
@@ -59,11 +59,11 @@ async def load_profile(bank_id: str) -> PreferenceProfile:
     """Read the user's preference profile from Hindsight. Missing profile = no preferences yet."""
     try:
         await ensure_bank(bank_id)
-        doc = await _get_client().documents.get_document(bank_id=bank_id, document_id=PROFILE_DOCUMENT_ID)
+        doc = await get_client().documents.get_document(bank_id=bank_id, document_id=PROFILE_DOCUMENT_ID)
     except NotFoundException:
         return PreferenceProfile()
-    except Exception as exc:  # noqa: BLE001
-        raise HindsightError(f"could not load preferences from Hindsight ({_describe(exc)})") from exc
+    except Exception as exc:
+        raise HindsightError(f"could not load preferences from Hindsight ({describe_error(exc)})") from exc
     raw = (doc.document_metadata or {}).get("profile")
     try:
         return PreferenceProfile.model_validate_json(raw) if raw else PreferenceProfile()
@@ -83,11 +83,11 @@ def render_profile(profile: PreferenceProfile) -> str:
 
 async def save_profile(bank_id: str, profile: PreferenceProfile) -> None:
     """Replace the user's profile document in Hindsight. Raises HindsightError."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     profile.updated_at = now.isoformat(timespec="seconds")
     try:
         await ensure_bank(bank_id)
-        resp = await _get_client().aretain(
+        resp = await get_client().aretain(
             bank_id=bank_id,
             content=render_profile(profile),
             context="the user's current long-term response preferences; this replaces any earlier list",
@@ -99,9 +99,9 @@ async def save_profile(bank_id: str, profile: PreferenceProfile) -> None:
             # Wait for storage so the very next report sees the new preferences.
             retain_async=False,
         )
-    except Exception as exc:  # noqa: BLE001
-        log.exception("Saving preference profile failed")
-        raise HindsightError(f"could not save preferences to Hindsight ({_describe(exc)})") from exc
+    except Exception as exc:
+        log.warning("Saving preference profile failed: %s", describe_error(exc))
+        raise HindsightError(f"could not save preferences to Hindsight ({describe_error(exc)})") from exc
     if not resp.success:
         raise HindsightError("Hindsight retain returned success=false")
 

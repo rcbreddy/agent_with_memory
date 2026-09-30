@@ -20,3 +20,15 @@ dist/
 
 # Other local files
 .lesshst
+# Application state (users, sessions, incidents) - never commit
+*.db
+*.db-wal
+*.db-shm
+
+# Example env files ARE committed (no secrets)
+!.env.example
+
+# Test / tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/

@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import type { IncidentInput, Severity } from '../services/api'
-import { Card, Field, Spinner, inputCls } from './ui'
+import { focusRing, inputCls } from './styles'
+import { Card, Field, Spinner } from './ui'
 
 const EMPTY: IncidentInput = {
   title: '',
@@ -63,7 +64,8 @@ export default function IncidentForm({ loading, onSubmit }: { loading: boolean; 
               key={d.label}
               type="button"
               onClick={() => setForm(d.data)}
-              className="rounded border border-slate-700 px-2 py-0.5 text-xs text-slate-400 hover:border-slate-500 hover:text-slate-200"
+              aria-label={`Fill the form with ${d.label}: ${d.data.title}`}
+              className={`rounded border border-slate-600 px-2 py-0.5 text-xs text-slate-300 hover:border-slate-400 hover:text-white ${focusRing}`}
             >
               {d.label}
             </button>
@@ -71,7 +73,7 @@ export default function IncidentForm({ loading, onSubmit }: { loading: boolean; 
         </div>
       }
     >
-      <form onSubmit={submit} className="space-y-3">
+      <form onSubmit={submit} className="space-y-3" aria-label="New incident">
         <Field label="Incident Title">
           <input className={inputCls} value={form.title} onChange={(e) => set('title', e.target.value)} placeholder="Payment API Latency" required minLength={3} />
         </Field>
@@ -103,12 +105,14 @@ export default function IncidentForm({ loading, onSubmit }: { loading: boolean; 
         <Field label="Recent Changes">
           <textarea className={inputCls} rows={2} value={form.recent_changes} onChange={(e) => set('recent_changes', e.target.value)} placeholder="Traffic increased after the latest release." />
         </Field>
-        <Field label="Additional Instructions">
+        <Field label="Additional Instructions" hint="“From now on …” is remembered as a lasting preference; one-off requests apply to this report only.">
           <textarea className={inputCls} rows={3} value={form.additional_instructions} onChange={(e) => set('additional_instructions', e.target.value)} placeholder="Add instructions for the AI agent..." maxLength={2000} />
         </Field>
         <button
+          type="submit"
           disabled={loading}
-          className="flex w-full items-center justify-center gap-2 rounded-md bg-sky-600 py-2.5 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-60"
+          aria-busy={loading}
+          className={`flex w-full items-center justify-center gap-2 rounded-md bg-sky-700 py-2.5 text-sm font-semibold text-white hover:bg-sky-600 disabled:opacity-60 ${focusRing}`}
         >
           {loading ? (
             <>

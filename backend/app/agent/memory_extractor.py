@@ -9,7 +9,9 @@ import re
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
+from app.config import get_settings
 from app.groq.client import GroqError, chat_json
+from app.redaction import redact
 from app.schemas import AutoMemoryItem, IncidentAnalysis, IncidentInput, RecallResult
 
 log = logging.getLogger(__name__)
@@ -79,20 +81,6 @@ class _Extraction(BaseModel):
         ]
 
 
-# Defense in depth: strip secrets/personal data even if the model lets them through.
-_REDACTIONS = [
-    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S), "[REDACTED_KEY]"),
-    (re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{8,}"), "Bearer [REDACTED]"),
-    (re.compile(r"(?i)\b(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|client[_-]?secret)\b(\s*[:=]\s*)\S+"), r"\1\2[REDACTED]"),
-    (re.compile(r"\b(AKIA|ASIA)[A-Z0-9]{16}\b"), "[REDACTED_AWS_KEY]"),
-    (re.compile(r"\b(sk|gsk|ghp|xox[abp])[-_][A-Za-z0-9-_]{16,}\b"), "[REDACTED_TOKEN]"),
-    (re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b"), "[REDACTED_JWT]"),
-    (re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"), "[REDACTED_EMAIL]"),
-    (re.compile(r"\b(?:\d[ -]?){13,19}\b"), "[REDACTED_NUMBER]"),
-    (re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^\s:/@]+:[^\s@/]+@"), r"\1[REDACTED]@"),
-]
-
-
 # Analysis-time root causes and fixes are hypotheses; label them so recall never treats them as facts.
 _UNCONFIRMED_PREFIX = {
     "root_cause": "Suspected root cause (unconfirmed):",
@@ -100,14 +88,31 @@ _UNCONFIRMED_PREFIX = {
 }
 
 
-def redact(text: str) -> str:
-    for pattern, repl in _REDACTIONS:
-        text = pattern.sub(repl, text)
-    return text.strip()
+# Near-duplicate threshold (Jaccard similarity of word sets) against memory that already exists.
+DUPLICATE_SIMILARITY = 0.8
+MAX_ITEMS = 6
+_LOG_LINE = re.compile(r"^\s*(\d{4}-\d{2}-\d{2}\b|\[?(ERROR|WARN|WARNING|INFO|DEBUG|FATAL|TRACE)\b)")
 
 
 def _normalize(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def is_near_duplicate(candidate: str, existing: list[str]) -> bool:
+    words = set(candidate.split())
+    for other in existing:
+        other_words = set(other.split())
+        union = words | other_words
+        if union and len(words & other_words) / len(union) >= DUPLICATE_SIMILARITY:
+            return True
+    return False
+
+
+def looks_like_raw_log(content: str, error_logs: str) -> bool:
+    """Raw log lines (or long verbatim copies of the submitted logs) are not durable knowledge."""
+    if _LOG_LINE.match(content):
+        return True
+    return any(len(chunk) >= 120 and chunk in error_logs for chunk in (content[:160], content[-160:]))
 
 
 def _already_known(recall: RecallResult) -> list[str]:
@@ -146,27 +151,46 @@ async def extract_memories(
     incident: IncidentInput, analysis: IncidentAnalysis, recall: RecallResult
 ) -> tuple[list[AutoMemoryItem], str, str, str]:
     """Returns (items, reason, likely_root_cause, recommended_fix). Raises GroqError on failure."""
-    data = await chat_json(SYSTEM_PROMPT, _build_input(incident, analysis, recall))
+    prompt = _build_input(incident, analysis, recall)
+    effort = get_settings().groq_aux_reasoning_effort
     try:
-        ext = _Extraction.model_validate(data)
+        result = await chat_json(SYSTEM_PROMPT, prompt, reasoning_effort=effort)
+    except GroqError as exc:
+        if not exc.retryable:
+            raise
+        result = await chat_json(SYSTEM_PROMPT, prompt, reasoning_effort=effort)  # one retry on malformed output
+    try:
+        ext = _Extraction.model_validate(result.data)
     except ValidationError as exc:
         raise GroqError(f"memory extraction returned invalid data: {exc.error_count()} errors") from exc
     if not ext.worth_remembering:
         return [], ext.reason or "Nothing new worth remembering.", "", ""
+    return (
+        filter_items(incident, ext.memories, recall),
+        ext.reason,
+        redact(ext.likely_root_cause)[:300],
+        redact(ext.recommended_fix)[:300],
+    )
 
-    known = {_normalize(k) for k in _already_known(recall)}
-    instructions = _normalize(incident.additional_instructions)
+
+def filter_items(incident: IncidentInput, candidates: list[AutoMemoryItem], recall: RecallResult) -> list[AutoMemoryItem]:
+    """Memory-quality gate: redact, label hypotheses, drop raw logs, model advice posing as team rules,
+    and exact or near duplicates (within the batch or of what memory already holds)."""
+    known = [_normalize(k) for k in _already_known(recall)]
+    has_instructions = bool(incident.additional_instructions.strip())
     items: list[AutoMemoryItem] = []
-    seen: set[str] = set()
-    for item in ext.memories[:6]:
+    kept: list[str] = []
+    for item in candidates[:MAX_ITEMS]:
         content = redact(item.content)[:500]
-        if item.category == "team_instruction" and not instructions:
+        if item.category == "team_instruction" and not has_instructions:
             continue  # the user gave no instructions; this is the model's own advice
+        if looks_like_raw_log(content, incident.error_logs):
+            continue
         if item.category in _UNCONFIRMED_PREFIX and "unconfirmed" not in content.lower():
             content = f"{_UNCONFIRMED_PREFIX[item.category]} {content}"
         key = _normalize(content)
-        if len(key) < 12 or key in seen or key in known:
-            continue  # empty, duplicate within this batch, or verbatim already in memory
-        seen.add(key)
+        if len(key) < 12 or is_near_duplicate(key, kept + known):
+            continue
+        kept.append(key)
         items.append(AutoMemoryItem(category=item.category, content=content))
-    return items, ext.reason, redact(ext.likely_root_cause)[:300], redact(ext.recommended_fix)[:300]
+    return items

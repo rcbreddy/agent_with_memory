@@ -1,15 +1,16 @@
-"""Minimal SQLite store for users, login sessions and the incident list shown in the UI.
+"""SQLite application state: users, login sessions and the incident list shown in the UI.
 
-This is NOT the agent's memory. Hindsight is the only memory the agent recalls from;
-this table only backs incident IDs and the history view. Every incident row has an owner
-(user_id) and every query filters by it.
+This is NOT the agent's memory. Hindsight is the only memory the agent recalls from; these tables
+back authentication, incident IDs, the history view and the status of background learning.
+Every incident row has an owner (user_id) and every query filters by it.
 """
 
 import json
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
-from typing import Any, Iterator
+from datetime import UTC, datetime
+from typing import Any
 
 from app.config import get_settings
 
@@ -21,11 +22,12 @@ CREATE TABLE IF NOT EXISTS users (
     hindsight_bank_id TEXT NOT NULL UNIQUE,
     created_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS sessions (
-    token TEXT PRIMARY KEY,
-    username TEXT NOT NULL,
+-- Only a SHA-256 hash of each bearer token is stored, so a leaked database yields no usable sessions.
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id),
     created_at TEXT NOT NULL,
-    user_id TEXT REFERENCES users(id)
+    expires_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS incidents (
     id TEXT PRIMARY KEY,
@@ -50,22 +52,26 @@ CREATE TABLE IF NOT EXISTS incidents (
     notes TEXT,
     resolved_at TEXT,
     retained_in_hindsight INTEGER NOT NULL DEFAULT 0,
-    user_id TEXT REFERENCES users(id)
+    user_id TEXT REFERENCES users(id),
+    learning_json TEXT
 );
 """
 
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 @contextmanager
 def connect() -> Iterator[sqlite3.Connection]:
-    conn = sqlite3.connect(get_settings().database_path)
+    conn = sqlite3.connect(get_settings().database_path, timeout=5.0)
     conn.row_factory = sqlite3.Row
     try:
         yield conn
         conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -78,17 +84,25 @@ def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, de
 
 def init_db() -> None:
     with connect() as conn:
+        conn.execute("PRAGMA journal_mode=WAL")  # background learning writes while requests read
         conn.executescript(SCHEMA)
-        # Migrate databases created before per-user isolation existed.
-        _add_column_if_missing(conn, "sessions", "user_id", "TEXT REFERENCES users(id)")
+        # Migrations for databases created by earlier versions.
         _add_column_if_missing(conn, "incidents", "user_id", "TEXT REFERENCES users(id)")
-        conn.execute("DELETE FROM sessions WHERE user_id IS NULL")  # pre-migration tokens: log in again
+        _add_column_if_missing(conn, "incidents", "learning_json", "TEXT")
+        # The old table stored bearer tokens in plaintext: drop it, invalidating every old token.
+        conn.execute("DROP TABLE IF EXISTS sessions")
+        conn.execute("DELETE FROM auth_sessions WHERE expires_at < ?", (now_iso(),))
         conn.execute("CREATE INDEX IF NOT EXISTS idx_incidents_user ON incidents(user_id, created_at)")
+
+
+def _loads(raw: str | None) -> Any:
+    return json.loads(raw) if raw else None
 
 
 def row_to_incident(row: sqlite3.Row) -> dict[str, Any]:
     data = dict(row)
-    data["analysis"] = json.loads(data.pop("analysis_json") or "null")
-    data["recall"] = json.loads(data.pop("recall_json") or "null")
+    data["analysis"] = _loads(data.pop("analysis_json"))
+    data["recall"] = _loads(data.pop("recall_json"))
+    data["learning"] = _loads(data.pop("learning_json", None))
     data["retained_in_hindsight"] = bool(data["retained_in_hindsight"])
     return data
